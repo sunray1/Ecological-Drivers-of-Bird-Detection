@@ -1,8 +1,8 @@
 # How Ecological Conditions Shape Human Detection of Birds
 
 **Anushka K. Gupta¹, Chandra Earl²**  
-¹ Arizona State University  
-² NEON Biorepository, Arizona State University
+¹ School of Computing and Augmented Intelligence, Arizona State University, PO Box 878809, Tempe, AZ 85287-4501  
+² NEON Biorepository, School of Life Sciences, Arizona State University, 734 W Alameda Drive, Tempe, AZ 85282
 
 ## Overview
 This project examines how ecological conditions influence human detection of birds. Using NEON bird surveys paired with standardized, colocated environmental data, we model detection probability as a function of site-level and survey-level ecological covariates and compare these models to baseline occupancy models without ecological predictors.
