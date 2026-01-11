@@ -1,0 +1,1206 @@
+---
+title: "How Ecological Conditions Shape Human Detection of Birds"
+author: "Anushka K. Gupta and Chandra Earl"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This RMarkdown is to document the code used....
+
+The environmental variables we are testing are:
+
+1. 2D wind speed [DP1.00001.001] (Summarized in Summary weather statistics [DP4.00001.001])
+2. Triple aspirated air temperature [DP1.00003.001] (Summarized in Summary weather statistics [DP4.00001.001])
+3. Barometric pressure [DP1.00004.001] (Summarized in Summary weather statistics [DP4.00001.001])
+4. Shortwave radiation (primary pyranometer) (DP1.00022.001) (Summarized in Summary weather statistics [DP4.00001.001])
+5. Relative humidity (DP1.00098.001) (Summarized in Summary weather statistics [DP4.00001.001])
+*6. Precipitation - weighing gauge [DP1.00044.001]
+7. Site management and event reporting [DP1.10111.001] (Planned or unplanned disturbances that have the potential to impact or affect data products)
+*8. IR biological temperature [DP1.00005.001]
+9. Wet deposition chemical analysis [DP1.00013.001]
+10. Stable isotopes in precipitation [DP1.00038.001]
+*11. Soil CO2 concentration [DP1.00095.001]
+*12. Soil temperature [DP1.00041.001]
+*13. Soil water content and water salinity [DP1.00094.001]
+*14. Soil heat flux plate [DP1.00040.001]
+15. Soil stable isotopes, periodic [DP1.10100.001] (bundled in Soil physical and chemical properties, periodic [DP1.10086.001]) 
+16. Soil inorganic nitrogen pools and transformations [DP1.10080.001] (bundled in Soil physical and chemical properties, periodic [DP1.10086.001])
+17. Coarse downed wood log survey [DP1.10010.001]
+18. Litterfall and fine woody debris production and chemistry [DP1.10033.001]
+19. Herbaceous clip harvest [DP1.10023.001]
+20. Plant presence and percent cover [DP1.10058.001]
+*21. eddy covariance? maybe [DP4.00200.001]
+
+
+# Setup R Environment
+
+```{r libraries, message=FALSE, warning=FALSE, results="hide"}
+library(neonUtilities) 
+library(RPresence)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(fuzzyjoin)
+library(tibble)
+```
+
+# Importing Data
+
+```{r}
+# Define NEON sites
+large_sites <- c(
+  "BARR", "BART", "BONA", "CLBJ", "CPER", "DEJU", "DSNY", "GRSM",
+  "GUAN", "HARV", "HEAL", "JERC", "JORN", "KONZ", "MLBS", "MOAB",
+  "NIWO", "OAES", "ONAQ", "ORNL", "OSBS", "RMNP", "SJER", "SRER",
+  "STEI", "TALL", "TEAK", "UKFS", "UNDE", "WOOD", "WREF", "YELL"
+)
+small_sites <- c(
+  "DELA", "LENO", "TOOL", "SOAP", "STER", "PUUM", "KONA",
+  "SERC", "DCFS", "NOGP", "LAJA", "BLAN", "SCBI", "ABBY", "TREE"
+)
+
+core_sites <- c(
+  "BONA", "CLBJ", "CPER", "GUAN", "HARV",
+  "KONZ", "NIWO", "ONAQ", "ORNL", "OSBS",
+  "PUUM", "SCBI", "SJER", "SRER", "TALL",
+  "TOOL", "UNDE", "WOOD", "WREF", "YELL"
+)
+
+core_large_sites <- intersect(core_sites, large_sites)
+
+sites <- core_large_sites
+
+#define years
+years = as.character(2015:2023)
+
+# Set up directories
+if (!dir.exists("data")) {
+  dir.create("data")
+}
+if (!dir.exists("outputs")) {
+  dir.create("outputs")
+}
+```
+
+
+## Breeding Landbird Point Counts
+
+https://data.neonscience.org/data-products/DP1.10003.001
+
+This data product contains the quality-controlled, native sampling resolution data from NEON's breeding landbird sampling. Breeding landbirds are defined as “smaller birds (usually exclusive of raptors and upland game birds) not usually associated with aquatic habitats” (Ralph et al. 1993). The breeding landbird point counts product provides records of species identification of all individuals observed during the 6-minute count period, as well as metadata which can be used to model detectability, e.g., weather, distances from observers to birds, and detection methods.
+
+```{r import}
+# Path to cached dataset
+bird_counts_path <- file.path("data", "bird_counts.RData")
+
+# Load cached data if available; otherwise download and save
+if (file.exists(bird_counts_path)) {
+  load(bird_counts_path)
+} else {
+  bird.counts <- loadByProduct(
+    dpID    = "DP1.10003.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token   = Sys.getenv("NEON_TOKEN"),
+    site    = sites,
+    check.size = FALSE
+  )
+  
+  save(bird.counts, file = bird_counts_path)
+}
+```
+
+## Summary weather statistics
+
+https://data.neonscience.org/data-products/DP4.00001.001
+
+```{r}
+# Path to cached dataset
+summary_weather_path <- file.path("data", "summary_weather.RData")
+
+# Load cached data if available; otherwise download and save
+if (file.exists(summary_weather_path)) {
+  load(summary_weather_path)
+} else {
+  summary.weather <- loadByProduct(
+      dpID    = "DP4.00001.001",
+      package = "basic",
+      release = "RELEASE-2025",
+      token   = Sys.getenv("NEON_TOKEN"),
+      site    = sites,
+      check.size = FALSE
+  )
+  
+  save(summary.weather, file = summary_weather_path)
+}
+```
+
+## Primary precipitation
+https://data.neonscience.org/data-products/DP1.00006.001
+
+```{r eval=FALSE, include=FALSE}
+primary_precipitation_path <- file.path("data", "primary_precipitation.RData")
+if (file.exists(primary_precipitation_path)) {
+  load(primary_precipitation_path)
+} else {
+  primary.precipitation <- loadByProduct(
+    dpID = "DP1.00006.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = TRUE
+  )
+  save(primary.precipitation, file = primary_precipitation_path)
+}
+```
+
+## Site management and event reporting
+https://data.neonscience.org/data-products/DP1.10111.001
+
+```{r}
+site_management_event_reporting_path <- file.path("data", "site_management_event_reporting.RData")
+if (file.exists(site_management_event_reporting_path)) {
+  load(site_management_event_reporting_path)
+} else {
+  site.management.event.reporting <- loadByProduct(
+    dpID = "DP1.10111.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(site.management.event.reporting, file = site_management_event_reporting_path)
+}
+```
+
+## IR biological temperature
+https://data.neonscience.org/data-products/DP1.00005.001
+
+```{r eval=FALSE, include=FALSE}
+ir_biological_temperature_path <- file.path("data", "ir_biological_temperature.RData")
+if (file.exists(ir_biological_temperature_path)) {
+  load(ir_biological_temperature_path)
+} else {
+  ir.biological.temperature <- loadByProduct(
+    dpID = "DP1.00005.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(ir.biological.temperature, file = ir_biological_temperature_path)
+}
+```
+
+
+## Wet deposition chemical analysis
+https://data.neonscience.org/data-products/DP1.00013.001
+
+```{r}
+wet_deposition_chemical_analysis_path <- file.path("data", "wet_deposition_chemical_analysis.RData")
+if (file.exists(wet_deposition_chemical_analysis_path)) {
+  load(wet_deposition_chemical_analysis_path)
+} else {
+  wet.deposition.chemical.analysis <- loadByProduct(
+    dpID = "DP1.00013.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(wet.deposition.chemical.analysis, file = wet_deposition_chemical_analysis_path)
+}
+```
+
+## Stable isotopes in precipitation
+https://data.neonscience.org/data-products/DP1.00038.001
+
+```{r}
+stable_isotopes_precipitation_path <- file.path("data", "stable_isotopes_precipitation.RData")
+if (file.exists(stable_isotopes_precipitation_path)) {
+  load(stable_isotopes_precipitation_path)
+} else {
+  stable.isotopes.precipitation <- loadByProduct(
+    dpID = "DP1.00038.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(stable.isotopes.precipitation, file = stable_isotopes_precipitation_path)
+}
+```
+
+## Soil CO2 concentration
+https://data.neonscience.org/data-products/DP1.00095.001
+
+```{r eval=FALSE, include=FALSE}
+soil_co2_concentration_path <- file.path("data", "soil_co2_concentration.RData")
+if (file.exists(soil_co2_concentration_path)) {
+  load(soil_co2_concentration_path)
+} else {
+  soil.co2.concentration <- loadByProduct(
+    dpID = "DP1.00095.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(soil.co2.concentration, file = soil_co2_concentration_path)
+}
+```
+
+## Soil temperature
+https://data.neonscience.org/data-products/DP1.00041.001
+
+```{r eval=FALSE, include=FALSE}
+soil_temperature_path <- file.path("data", "soil_temperature.RData")
+if (file.exists(soil_temperature_path)) {
+  load(soil_temperature_path)
+} else {
+  soil.temperature <- loadByProduct(
+    dpID = "DP1.00041.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = TRUE
+  )
+  save(soil.temperature, file = soil_temperature_path)
+}
+```
+
+## Soil water content and water salinity
+https://data.neonscience.org/data-products/DP1.00094.001
+
+```{r eval=FALSE, include=FALSE}
+soil_water_content_salinity_path <- file.path("data", "soil_water_content_salinity.RData")
+if (file.exists(soil_water_content_salinity_path)) {
+  load(soil_water_content_salinity_path)
+} else {
+  soil.water.content.salinity <- loadByProduct(
+    dpID = "DP1.00094.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = TRUE
+  )
+  save(soil.water.content.salinity, file = soil_water_content_salinity_path)
+}
+```
+
+## Soil heat flux plate
+https://data.neonscience.org/data-products/DP1.00040.001
+
+```{r eval=FALSE, include=FALSE}
+soil_heat_flux_plate_path <- file.path("data", "soil_heat_flux_plate.RData")
+if (file.exists(soil_heat_flux_plate_path)) {
+  load(soil_heat_flux_plate_path)
+} else {
+  soil.heat.flux.plate <- loadByProduct(
+    dpID = "DP1.00040.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = TRUE
+  )
+  save(soil.heat.flux.plate, file = soil_heat_flux_plate_path)
+}
+```
+
+## Soil physical and chemical properties, periodic
+https://data.neonscience.org/data-products/DP1.10086.001
+
+```{r}
+soil_physical_chemical_properties_periodic_path <- file.path("data", "soil_physical_chemical_properties_periodic.RData")
+if (file.exists(soil_physical_chemical_properties_periodic_path)) {
+  load(soil_physical_chemical_properties_periodic_path)
+} else {
+  soil.physical.chemical.properties.periodic <- loadByProduct(
+    dpID = "DP1.10086.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(soil.physical.chemical.properties.periodic, file = soil_physical_chemical_properties_periodic_path)
+}
+```
+
+## Coarse downed wood log survey
+https://data.neonscience.org/data-products/DP1.10010.001
+
+```{r}
+coarse_downed_wood_log_survey_path <- file.path("data", "coarse_downed_wood_log_survey.RData")
+if (file.exists(coarse_downed_wood_log_survey_path)) {
+  load(coarse_downed_wood_log_survey_path)
+} else {
+  coarse.downed.wood.log.survey <- loadByProduct(
+    dpID = "DP1.10010.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(coarse.downed.wood.log.survey, file = coarse_downed_wood_log_survey_path)
+}
+```
+
+## Litterfall and fine woody debris production and chemistry
+https://data.neonscience.org/data-products/DP1.10033.001
+
+```{r}
+litterfall_fine_woody_debris_path <- file.path("data", "litterfall_fine_woody_debris.RData")
+if (file.exists(litterfall_fine_woody_debris_path)) {
+  load(litterfall_fine_woody_debris_path)
+} else {
+  litterfall.fine.woody.debris <- loadByProduct(
+    dpID = "DP1.10033.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(litterfall.fine.woody.debris, file = litterfall_fine_woody_debris_path)
+}
+```
+
+## Herbaceous clip harvest
+https://data.neonscience.org/data-products/DP1.10023.001
+
+```{r}
+herbaceous_clip_harvest_path <- file.path("data", "herbaceous_clip_harvest.RData")
+if (file.exists(herbaceous_clip_harvest_path)) {
+  load(herbaceous_clip_harvest_path)
+} else {
+  herbaceous.clip.harvest <- loadByProduct(
+    dpID = "DP1.10023.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(herbaceous.clip.harvest, file = herbaceous_clip_harvest_path)
+}
+```
+
+## Plant presence and percent cover
+https://data.neonscience.org/data-products/DP1.10058.001
+
+```{r}
+plant_presence_percent_cover_path <- file.path("data", "plant_presence_percent_cover.RData")
+if (file.exists(plant_presence_percent_cover_path)) {
+  load(plant_presence_percent_cover_path)
+} else {
+  plant.presence.percent.cover <- loadByProduct(
+    dpID = "DP1.10058.001",
+    package = "basic",
+    release = "RELEASE-2025",
+    token = Sys.getenv("NEON_TOKEN"),
+    site = sites,
+    check.size = FALSE
+  )
+  save(plant.presence.percent.cover, file = plant_presence_percent_cover_path)
+}
+```
+
+# Preparing the Data
+
+## Breeding Landbird Point Counts
+
+NEON provides separate tables for point-count survey metadata (`brd_perpoint`) and the bird counts themselves (`brd_countdata`).
+
+1. Create a unique point-count survey ID
+
+Each point-count survey needs a unique identifier so that we can match the detection data (brd_countdata) with the corresponding per-point metadata (brd_perpoint). We extract the survey year from eventID and then combine the plot, point, year, and bout into a single key called pointSurveyID for each of the tables. Note, because the siteID is already included in the plotID (e.g., BART_012), siteID is not included in the construction of `pointSurveyID`.
+
+```{r uniqueIdentifier}
+brd_perpoint_clean <- bird.counts$brd_perpoint %>%
+  mutate(year = str_extract(eventID, "\\d{4}"))%>%
+  mutate(pointSurveyID = paste(plotID, "point", pointID, year, "bout", boutNumber, sep = "_"))
+
+brd_countdata_clean <- bird.counts$brd_countdata %>%
+  mutate(year = str_extract(eventID, "\\d{4}"))%>%
+  mutate(pointSurveyID = paste(plotID, "point", pointID, year, "bout", boutNumber, sep = "_"))
+```
+
+2. Remove incomplete surveys
+
+The `samplingImpractical` field flags point-count surveys that could not be completed (e.g., weather, access issues). For our purposes, we keep only surveys marked as "OK".
+
+```{r}
+brd_perpoint_clean <- brd_perpoint_clean %>%
+  filter(samplingImpractical == "OK")
+```
+
+3. Keep only species-level records
+
+For this workflow, we only focus on detections identified to the species level. Records that are not identified to species (or have `NA` in `taxonRank`) are dropped.
+
+```{r}
+brd_countdata_clean <- brd_countdata_clean %>%
+  filter(taxonRank == "species")
+```
+
+4. Remove duplicate surveys
+
+Each `pointSurveyID` should correspond to a single point-count survey. Occasionally, duplicate IDs appear, likely due to data entry or processing issues. We identify any duplicated `pointSurveyID` values and remove those surveys from both tables.
+
+```{r}
+duplicate_pointSurveyID <- brd_perpoint_clean %>%
+  count(pointSurveyID) %>%
+  filter(n > 1) %>%
+  pull(pointSurveyID)
+
+brd_perpoint_clean <- brd_perpoint_clean %>%
+  filter(!pointSurveyID %in% duplicate_pointSurveyID)
+
+brd_countdata_clean <- brd_countdata_clean %>%
+  filter(!pointSurveyID %in% duplicate_pointSurveyID)
+```
+
+5. Join per-point and count tables
+
+Finally, we join the cleaned detection data (`brd_countdata_clean`) with the cleaned per-point metadata (`brd_perpoint_clean`) using `pointSurveyID` as the primary key. After the join, we drop duplicate columns and keep a single, combined dataset.
+
+```{r}
+brd_joineddata_clean <- inner_join(
+  brd_countdata_clean,
+  brd_perpoint_clean,
+  by = "pointSurveyID",
+  suffix = c(".count", ".perpoint")
+)
+
+#Remove duplicate columns between tables
+brd_joineddata_clean <- brd_joineddata_clean %>%
+  select(-matches("\\.perpoint$"))
+names(brd_joineddata_clean) <- gsub("\\.count$", "", names(brd_joineddata_clean))
+```
+
+## Summary Weather Statistics
+
+### 2D wind speed
+
+```{r}
+wind_speed <- summary.weather$wss_daily_wind
+
+#Average wind speed across all heights and values
+windSpeedMean <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    wind_speed %>%
+      transmute(siteID, date = as.Date(date), wssWindSpeedMean) %>%
+      group_by(siteID, date) %>%
+      summarise(wssWindSpeedMean = mean(wssWindSpeedMean, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssWindSpeedMean = na_if(mean(wssWindSpeedMean, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssWindSpeedMean) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#How gusty or changeable the wind was that day, averaged across the tower
+windSpeedHorizontalVariance <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    wind_speed %>%
+      transmute(siteID, date = as.Date(date), wssWindSpeedVariance) %>%
+      group_by(siteID, date) %>%
+      summarise(wssWindSpeedVariance = mean(wssWindSpeedVariance, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssWindSpeedVariance = na_if(mean(wssWindSpeedVariance, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssWindSpeedVariance) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#How different the average wind conditions are from bottom to top of the tower
+windSpeedVerticalVariance <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    wind_speed %>%
+      transmute(
+        siteID,
+        date = as.Date(date),
+        verticalPosition,
+        wssWindSpeedMean
+      ) %>%
+      group_by(siteID, date, verticalPosition) %>%
+      summarise(mean_vert = mean(wssWindSpeedMean, na.rm = TRUE), .groups = "drop") %>%
+      group_by(siteID, date) %>%
+      summarise(
+        windVar_vert = na_if(var(mean_vert, na.rm = TRUE), NaN),
+        .groups = "drop"
+      ),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    windVar_vert = na_if(mean(windVar_vert, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = windVar_vert) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+```
+
+### Triple aspirated air temperature
+
+```{r}
+air_temp <- summary.weather$wss_daily_temp
+
+#Average air temp across all heights and values
+airTempMean <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    air_temp %>%
+      transmute(siteID, date = as.Date(date), wssTempTripleMean) %>%
+      group_by(siteID, date) %>%
+      summarise(wssTempTripleMean = mean(wssTempTripleMean, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssTempTripleMean = na_if(mean(wssTempTripleMean, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssTempTripleMean) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Minimum air temp across all heights and values
+airTempMin <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    air_temp %>%
+      transmute(siteID, date = as.Date(date), wssTempTripleMinimum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssTempTripleMinimum = mean(wssTempTripleMinimum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssTempTripleMinimum = na_if(mean(wssTempTripleMinimum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssTempTripleMinimum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Maximum air temp across all heights and values
+airTempMax <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    air_temp %>%
+      transmute(siteID, date = as.Date(date), wssTempTripleMaximum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssTempTripleMaximum = mean(wssTempTripleMaximum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssTempTripleMaximum = na_if(mean(wssTempTripleMaximum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssTempTripleMaximum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#How changeable the air temp was that day, averaged across the tower
+airTempHorizontalVariance <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    air_temp %>%
+      transmute(siteID, date = as.Date(date), wssTempTripleVariance) %>%
+      group_by(siteID, date) %>%
+      summarise(wssTempTripleVariance = mean(wssTempTripleVariance, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssTempTripleVariance = na_if(mean(wssTempTripleVariance, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssTempTripleVariance) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+```
+
+### Barometric pressure
+
+```{r}
+pressure <- summary.weather$wss_daily_pres
+
+#Average pressure across all heights and values
+pressureMean <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    pressure %>%
+      transmute(siteID, date = as.Date(date), wssStaPresMean) %>%
+      group_by(siteID, date) %>%
+      summarise(wssStaPresMean = mean(wssStaPresMean, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssStaPresMean = na_if(mean(wssStaPresMean, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssStaPresMean) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+```
+
+### Shortwave radiation (primary pyranometer)
+
+```{r}
+radiation <- summary.weather$wss_daily_shortRad
+
+#Average radiation across all heights and values
+radiationMean <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    radiation %>%
+      transmute(siteID, date = as.Date(date), wssShortRadMean) %>%
+      group_by(siteID, date) %>%
+      summarise(wssShortRadMean = mean(wssShortRadMean, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssShortRadMean = na_if(mean(wssShortRadMean, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssShortRadMean) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Minimum radiation across all heights and values
+radiationMin <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    radiation %>%
+      transmute(siteID, date = as.Date(date), wssShortRadMinimum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssShortRadMinimum = mean(wssShortRadMinimum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssShortRadMinimum = na_if(mean(wssShortRadMinimum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssShortRadMinimum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Maximum radiation across all heights and values
+radiationMax <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    radiation %>%
+      transmute(siteID, date = as.Date(date), wssShortRadMaximum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssShortRadMaximum = mean(wssShortRadMaximum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssShortRadMaximum = na_if(mean(wssShortRadMaximum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssShortRadMaximum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+```
+
+### Relative humidity
+
+```{r}
+humidity <- summary.weather$wss_daily_humid
+
+#Average humidity across all heights and values
+humidityMean <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    humidity %>%
+      transmute(siteID, date = as.Date(date), wssRHMean) %>%
+      group_by(siteID, date) %>%
+      summarise(wssRHMean = mean(wssRHMean, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssRHMean = na_if(mean(wssRHMean, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssRHMean) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Minimum humidity across all heights and values
+humidityMin <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    humidity %>%
+      transmute(siteID, date = as.Date(date), wssRHMinimum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssRHMinimum = mean(wssRHMinimum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssRHMinimum = na_if(mean(wssRHMinimum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssRHMinimum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+#Maximum humidity across all heights and values
+humidityMax <- brd_joineddata_clean %>%
+  filter(siteID %in% sites,
+         year %in% years) %>%
+  transmute(siteID, plotID, year, date = as.Date(startDate)) %>%
+  left_join(
+    humidity %>%
+      transmute(siteID, date = as.Date(date), wssRHMaximum) %>%
+      group_by(siteID, date) %>%
+      summarise(wssRHMaximum = mean(wssRHMaximum, na.rm = TRUE), .groups = "drop"),
+    by = c("siteID", "date")
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(
+    wssRHMaximum = na_if(mean(wssRHMaximum, na.rm = TRUE), NaN),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = year, values_from = wssRHMaximum) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+
+```
+
+### Site management and event reporting
+
+```{r warning=FALSE}
+eventData <- site.management.event.reporting$sim_eventData
+
+#eventData <- eventData %>%
+#  mutate(eventName = paste(eventType, methodTypeChoice, sep = "_"))
+
+siteManagementEvents <- brd_joineddata_clean %>%
+  filter(siteID %in% sites, year %in% years) %>%
+  transmute(plotID, year, siteID, t = as.POSIXct(startDate), sid = row_number()) %>%
+  left_join(
+    eventData %>%
+      transmute(siteID, es = as.POSIXct(startDate), ee = as.POSIXct(endDate), eventType),
+    by = "siteID"
+  ) %>%
+  group_by(sid, plotID, year) %>%
+  summarise(
+    eventType = {
+      ev <- unique(eventType[!is.na(eventType) & es <= t & t <= ee])
+      if (length(ev) == 0) "NoEvent" else paste(sort(ev), collapse = ";")
+    },
+    .groups = "drop"
+  ) %>%
+  group_by(plotID, year) %>%
+  summarise(eventType = first(eventType), .groups = "drop") %>%
+  pivot_wider(names_from = year, values_from = eventType) %>%
+  tibble::column_to_rownames("plotID") %>%
+  select(all_of(sort(names(.))))
+```
+
+
+## Covariate Data Frame
+
+```{r}
+# create the surveycov dataframe
+surveycov <-  data.frame(
+  windSpeedMean = unlist(windSpeedMean),
+  windSpeedHorizontalVariance = unlist(windSpeedHorizontalVariance),
+  windSpeedVerticalVariance = unlist(windSpeedVerticalVariance),
+  airTempMean = unlist(airTempMean),
+  airTempMin = unlist(airTempMin),
+  airTempMax = unlist(airTempMax),
+  airTempHorizontalVariance = unlist(airTempHorizontalVariance),
+  pressureMean = unlist(pressureMean),
+  radiationMean = unlist(radiationMean),
+  radiationMin = unlist(radiationMin),
+  radiationMax = unlist(radiationMax),
+  humidityMean = unlist(humidityMean),
+  humidityMin = unlist(humidityMin),
+  humidityMax = unlist(humidityMax)
+  )
+
+# remove the rownames
+row.names(surveycov) <- NULL
+
+head(surveycov)
+
+```
+
+# Analyzing the Data
+
+## Baseline Modeling
+
+We define a function to run a baseline model and pull the results. This allows us to run the same function across all available species. 
+
+```{r include=FALSE}
+baseline_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean, sites, years) {
+  
+  results <- list()
+  detection_histories <- list()
+  
+  for (i in seq_len(nrow(species_df))) {
+    
+    sci_name <- species_df$scientificName[i]
+    common_name <- species_df$vernacularName[i]
+    
+    message(
+      "Running species: ",
+      sci_name,
+      " (",
+      common_name,
+      ")"
+    )
+    
+    # Filter detection data to this species and the sites
+    brd_species <- brd_joineddata_clean %>%
+      filter(siteID %in% sites, scientificName == sci_name)
+    
+    # Get valid surveys (plot-year combos with effort)
+    valid_plot_years <- brd_perpoint_clean %>%
+      filter(
+        siteID %in% sites,
+        year %in% years
+      ) %>%
+      distinct(plotID, year)
+    
+    # Get detections for this species
+    detections <- brd_species %>%
+      filter(siteID %in% sites) %>%
+      group_by(plotID, year) %>%
+      summarize(present = 1, .groups = "drop")
+    
+    # Build plot-year detection matrix
+    plot_by_year <- valid_plot_years %>%
+      left_join(detections, by = c("plotID","year")) %>%
+      mutate(present = replace_na(present, 0)) %>%
+      pivot_wider(
+        names_from = year,
+        values_from = present
+      ) %>%
+      select(1, sort(names(.)[-1])) %>%
+      arrange(plotID)
+    
+    # Create Pao object
+    birds_pao <- createPao(
+      data = plot_by_year[, years],
+      unitnames = plot_by_year$plotID,
+      title = common_name
+    )
+    
+    # Run occupancy model
+    model <- occMod(
+      data = birds_pao,
+      model = list(psi ~ 1, p ~ 1),
+      type = "so"
+    )
+    
+    # Extract estimates
+    ests <- print_one_site_estimates(mod = model) %>%
+      as.data.frame() %>%
+      slice(1:2)
+    
+    rownames(ests) <- NULL
+    
+    named_est <- list(
+      vernacularName = common_name,
+      psi_Estimate = ests$est[1],
+      psi_SE       = ests$se[1],
+      psi_L95      = ests$lower[1],
+      psi_U95      = ests$upper[1],
+      p_Estimate   = ests$est[2],
+      p_SE         = ests$se[2],
+      p_L95        = ests$lower[2],
+      p_U95        = ests$upper[2],
+      neg2loglike  = model$neg2loglike
+    )
+
+    detection_histories[[sci_name]] <- plot_by_year
+    results[[sci_name]] <- named_est
+  }
+  
+  return(list(
+    estimates = results,
+    detection_histories = detection_histories
+  ))
+  
+}
+```
+
+Run function and save the results.
+
+```{r warning=FALSE}
+species_input <- brd_joineddata_clean %>%
+  distinct(scientificName, vernacularName) %>%
+  arrange(scientificName)
+
+baseline_results_df <- baseline_model(
+  species_df = species_input,
+  brd_joineddata_clean = brd_joineddata_clean,
+  brd_perpoint_clean = brd_perpoint_clean,
+  sites = sites,
+  years = years
+)
+```
+
+## Covariate Modeling
+
+Define a function to run survey covariates
+
+```{r include=FALSE}
+covariate_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean, sites, years, surveycov, covtouse) {
+  
+  results <- list()
+  detection_histories <- list()
+  
+  for (i in seq_len(nrow(species_df))) {
+    
+    sci_name <- species_df$scientificName[i]
+    common_name <- species_df$vernacularName[i]
+    
+    message(
+      "Running species: ",
+      sci_name,
+      " (",
+      common_name,
+      "): ",
+      covtouse
+    )
+    
+    # Filter detection data to this species and the sites
+    brd_species <- brd_joineddata_clean %>%
+      filter(siteID %in% sites, scientificName == sci_name)
+    
+    # Get valid surveys (plot-year combos with effort)
+    valid_plot_years <- brd_perpoint_clean %>%
+      filter(
+        siteID %in% sites,
+        year %in% years
+      ) %>%
+      distinct(plotID, year)
+    
+    # Get detections for this species
+    detections <- brd_species %>%
+      filter(siteID %in% sites) %>%
+      group_by(plotID, year) %>%
+      summarize(present = 1, .groups = "drop")
+    
+    # Build plot-year detection matrix
+    plot_by_year <- valid_plot_years %>%
+      left_join(detections, by = c("plotID","year")) %>%
+      mutate(present = replace_na(present, 0)) %>%
+      pivot_wider(
+        names_from = year,
+        values_from = present
+      ) %>%
+      select(1, sort(names(.)[-1])) %>%
+      arrange(plotID)
+    
+    # Create Pao object
+    birds_pao <- createPao(
+      data = plot_by_year[, years],
+      unitnames = plot_by_year$plotID,
+      survcov = surveycov,
+      title = common_name
+    )
+    
+    # Run occupancy model
+    model <- occMod(
+      data = birds_pao,
+      model = list(
+        psi = ~ 1,
+        p   = as.formula(paste("~", covtouse))
+      ),
+      type = "so"
+    )
+    
+    # Extract estimates
+    ests <- print_one_site_estimates(mod = model) %>%
+      as.data.frame() %>%
+      slice(1:2)
+    
+    rownames(ests) <- NULL
+    
+    named_est <- list(
+      vernacularName = common_name,
+      psi_Estimate = ests$est[1],
+      psi_SE       = ests$se[1],
+      psi_L95      = ests$lower[1],
+      psi_U95      = ests$upper[1],
+      neg2loglike  = model$neg2loglike,
+      slope        = coef(model, 'p', prob = 0.95)[2, 1, drop = TRUE],
+      se           = coef(model, 'p', prob = 0.95)[2, 2, drop = TRUE],
+      lowerCI      = coef(model, 'p', prob = 0.95)[2, 3, drop = TRUE],
+      upperCI      = coef(model, 'p', prob = 0.95)[2, 4, drop = TRUE],
+      ci_has_zero  = as.integer(
+                        coef(model, "p", prob = 0.95)[2, 3] <= 0 &
+                        coef(model, "p", prob = 0.95)[2, 4] >= 0
+                      )
+    )
+
+    detection_histories[[sci_name]] <- plot_by_year
+    results[[sci_name]] <- named_est
+  }
+  
+  return(list(
+    estimates = results,
+    detection_histories = detection_histories
+  ))
+  
+}
+```
+
+Run across all covariates
+
+```{r warning=FALSE, include=FALSE}
+species_input <- brd_joineddata_clean %>%
+  distinct(scientificName, vernacularName) %>%
+  arrange(scientificName)
+
+listofcovs <- colnames(surveycov)
+
+covariate_results_df <- list()
+for (k in seq_len(length(listofcovs))) {
+  cov_name <- listofcovs[k]
+
+  covariate_results_df[[cov_name]] <- covariate_model(
+    species_df = species_input,
+    brd_joineddata_clean = brd_joineddata_clean,
+    brd_perpoint_clean = brd_perpoint_clean,
+    sites = sites,
+    years = years,
+    surveycov = surveycov,
+    covtouse = cov_name
+  )
+}
+
+```
+
+# Analyzing Results
+
+Combine the two results into one object and compare covariate models to baseline for each bird
+
+```{r}
+species_names <- names(baseline_results_df$estimates)
+cov_names     <- names(covariate_results_df)
+
+combined_results <- setNames(lapply(species_names, function(sp) {
+
+  rows <- list(baseline = baseline_results_df$estimates[[sp]])
+
+  for (cv in cov_names) {
+    rows[[cv]] <- covariate_results_df[[cv]]$estimates[[sp]]
+  }
+
+  bind_rows(lapply(rows, \(x) as.data.frame(as.list(x))), .id = "model") %>%
+    tibble::column_to_rownames("model")
+
+}), species_names)
+
+combined_results <- lapply(combined_results, function(df) {
+  baseline_val <- df["baseline", "neg2loglike"]
+
+  df$delta_neg2loglike <- df$neg2loglike - baseline_val
+  df
+})
+
+```
+
+Summarize across all birds for each covariate
+
+```{r}
+#tolerance threshold for zero
+eps <- 1
+
+long <- bind_rows(lapply(names(combined_results), function(sp) {
+  combined_results[[sp]] %>%
+    rownames_to_column("covariate") %>%
+    mutate(species = sp)
+}))
+
+cov_summary <- long %>%
+  filter(covariate != "baseline") %>%
+  group_by(covariate) %>%
+  summarise(
+    n_species = n_distinct(species),
+
+    n_delta_lt0 = sum(delta_neg2loglike < -eps, na.rm = TRUE),
+    n_delta_gt0 = sum(delta_neg2loglike >  eps, na.rm = TRUE),
+    n_delta_eq0 = sum(abs(delta_neg2loglike) <= eps, na.rm = TRUE),
+    avg_delta   = mean(delta_neg2loglike, na.rm = TRUE),
+
+    n_slope_pos = sum(slope > 0, na.rm = TRUE),
+    n_slope_neg = sum(slope < 0, na.rm = TRUE),
+    avg_slope   = mean(slope, na.rm = TRUE),
+
+    n_CI_incl0  = sum(ci_has_zero, na.rm = TRUE),
+    avg_CI      = mean(upperCI - lowerCI, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+```
+
