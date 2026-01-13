@@ -902,6 +902,7 @@ baseline_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean,
   
   results <- list()
   detection_histories <- list()
+  models <- list()
   
   for (i in seq_len(nrow(species_df))) {
     
@@ -981,11 +982,13 @@ baseline_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean,
 
     detection_histories[[sci_name]] <- plot_by_year
     results[[sci_name]] <- named_est
+    models[[sci_name]] <- model
   }
   
   return(list(
     estimates = results,
-    detection_histories = detection_histories
+    detection_histories = detection_histories,
+    models = models
   ))
   
 }
@@ -995,6 +998,10 @@ Run function and save the results.
 
 ```{r warning=FALSE}
 species_input <- brd_joineddata_clean %>%
+  filter(
+    siteID %in% sites,
+    year %in% years
+  ) %>%
   distinct(scientificName, vernacularName) %>%
   arrange(scientificName)
 
@@ -1016,6 +1023,7 @@ covariate_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean
   
   results <- list()
   detection_histories <- list()
+  models <- list()
   
   for (i in seq_len(nrow(species_df))) {
     
@@ -1094,8 +1102,8 @@ covariate_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean
       neg2loglike  = model$neg2loglike,
       slope        = coef(model, 'p', prob = 0.95)[2, 1, drop = TRUE],
       se           = coef(model, 'p', prob = 0.95)[2, 2, drop = TRUE],
-      lowerCI      = coef(model, 'p', prob = 0.95)[2, 3, drop = TRUE],
-      upperCI      = coef(model, 'p', prob = 0.95)[2, 4, drop = TRUE],
+      slopeLowerCI = coef(model, 'p', prob = 0.95)[2, 3, drop = TRUE],
+      slopeUpperCI = coef(model, 'p', prob = 0.95)[2, 4, drop = TRUE],
       ci_has_zero  = as.integer(
                         coef(model, "p", prob = 0.95)[2, 3] <= 0 &
                         coef(model, "p", prob = 0.95)[2, 4] >= 0
@@ -1104,11 +1112,13 @@ covariate_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean
 
     detection_histories[[sci_name]] <- plot_by_year
     results[[sci_name]] <- named_est
+    models[[sci_name]] <- model
   }
   
   return(list(
     estimates = results,
-    detection_histories = detection_histories
+    detection_histories = detection_histories,
+    models = models
   ))
   
 }
@@ -1118,6 +1128,10 @@ Run across all covariates
 
 ```{r warning=FALSE, include=FALSE}
 species_input <- brd_joineddata_clean %>%
+  filter(
+    siteID %in% sites,
+    year %in% years
+  ) %>%
   distinct(scientificName, vernacularName) %>%
   arrange(scientificName)
 
@@ -1170,6 +1184,78 @@ combined_results <- lapply(combined_results, function(df) {
 
 ```
 
+Clean unusable models
+
+```{r}
+#if baseline has a p or psi 95% CI of 0-1, remove it
+combined_results <- combined_results[
+  !vapply(
+    combined_results,
+    function(df) {
+      (df["baseline", "p_L95"] == 0 & df["baseline", "p_U95"] == 1) |
+      (df["baseline", "psi_L95"] == 0 & df["baseline", "psi_U95"] == 1)
+    },
+    logical(1)
+  )
+]
+
+#if the baseline psi values are all below 0, there likely was not enough data to make a model
+min_psi <- 0.01
+
+combined_results <- combined_results[
+  !vapply(
+    combined_results,
+    function(df) {
+      with(df["baseline", ],
+           psi_Estimate < min_psi &
+           psi_L95      < min_psi &
+           psi_U95      < min_psi)
+    },
+    logical(1)
+  )
+]
+
+#remove covariate models from birds that have NA for se, slopeLowerCI and slopeUpperCI
+combined_results <- lapply(combined_results, function(df) {
+  keep <- !(is.na(df$se) & is.na(df$slopeLowerCI) & is.na(df$slopeUpperCI))
+  keep[rownames(df) == "baseline"] <- TRUE
+  df[keep, , drop = FALSE]
+})
+
+#Remove species for which there is very little variation in detections at plots. These are valid, though aren't useful for detection since it will mostly always be 1 or close to it
+
+mostly_thresh <- 0.85   # "mostly 1s" within plot
+plot_frac_thresh <- 0.9  # >50% of eligible plots
+
+problem_species <- names(covariate_results_df$humidityMax$detection_histories)[
+  vapply(covariate_results_df$humidityMax$detection_histories, function(dh) {
+
+    y <- dh[, setdiff(names(dh), "plotID"), drop = FALSE]
+    y <- as.matrix(sapply(y, function(x) as.numeric(as.character(x))))
+
+    has_det <- rowSums(y == 1, na.rm = TRUE) >= 1
+    if (!any(has_det)) return(FALSE)
+
+    prop1 <- rowMeans(y == 1, na.rm = TRUE)
+
+    mean(prop1[has_det] >= mostly_thresh, na.rm = TRUE) > plot_frac_thresh
+  }, logical(1))
+]
+
+combined_results <- combined_results[
+  !names(combined_results) %in% problem_species
+]
+
+#Manually remove
+combined_results <- combined_results[
+  !names(combined_results) %in% c("Chamaea fasciata",  #this has only one detection ever
+                                  "Deltarhynchus flammulatus") #this has only one detection ever
+]
+
+
+```
+
+
 Summarize across all birds for each covariate
 
 ```{r}
@@ -1198,9 +1284,115 @@ cov_summary <- long %>%
     avg_slope   = mean(slope, na.rm = TRUE),
 
     n_CI_incl0  = sum(ci_has_zero, na.rm = TRUE),
-    avg_CI      = mean(upperCI - lowerCI, na.rm = TRUE),
+    avg_CI      = mean(slopeUpperCI - slopeLowerCI, na.rm = TRUE),
 
     .groups = "drop"
   )
+```
+
+Which species has a slope CI that does not include 0 (and therefore may be significant) for a covariate?
+```{r}
+covtoplot <- "radiationMin"
+
+species_ci_excl0 <- names(combined_results)[
+  vapply(combined_results, function(df) {
+    covtoplot %in% rownames(df) &&
+      df[covtoplot, "ci_has_zero"] == 0
+  }, logical(1))
+]
+
+species_ci_excl0
+
+```
+# Plotting Results
+
+Let's plot something - plot predicted detection at different covariate values for a species
+
+```{r}
+covtoplot <- "radiationMin"
+
+# choose which 9 to view (change start index: 1, 10, 19, 28, ...)
+start <- 19
+sp_batch <- species_ci_excl0[start:min(start + 8, length(species_ci_excl0))]
+sp_batch <- c("Quiscalus major")
+
+# x grid (your IQR-trimmed range)
+vals <- unlist(get(covtoplot))
+q <- quantile(vals, c(0.25, 0.75), na.rm = TRUE)
+iqr <- q[2] - q[1]
+vals <- vals[vals >= (q[1] - 1.5*iqr) & vals <= (q[2] + 1.5*iqr)]
+
+newdata <- setNames(
+  data.frame(seq(min(vals, na.rm = TRUE), max(vals, na.rm = TRUE), by = 1)),
+  covtoplot
+)
+
+# predictions for the 9 species
+pred_all <- bind_rows(lapply(sp_batch, function(sp) {
+  p <- predict(covariate_results_df[[covtoplot]]$models[[sp]], newdata, "p")
+  p[[covtoplot]] <- newdata[[covtoplot]]
+  p$species <- sp
+  p
+}))
+
+ggplot(pred_all, aes(x = .data[[covtoplot]], y = est)) +
+  geom_line() +
+  geom_line(aes(y = lower_0.95), linetype = "dashed") +
+  geom_line(aes(y = upper_0.95), linetype = "dashed") +
+  facet_wrap(~ species, ncol = 3) +
+  labs(x = covtoplot, y = "Predicted detection") +
+  lims(y = c(0, 1))
+
+```
+Plot distribution of a parameter across all birds for a covariate
+
+```{r}
+covtoplot  <- "radiationMin"
+paramplot  <- "slope" 
+
+vals <- sapply(combined_results, function(df) {
+  df[covtoplot, paramplot]
+})
+
+ggplot(data.frame(value = vals), aes(x = value)) +
+  geom_histogram(bins = 30, color = "black", fill = "grey80") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = paste(paramplot, "for", covtoplot),
+    y = "Number of species"
+  )
+```
+
+Figure out which species has the highest/lowest value of a covariate
+
+```{r}
+covtoplot <- "radiationMin"
+paramplot <- "slope"
+
+vals <- sapply(names(combined_results), function(sp) combined_results[[sp]][covtoplot, paramplot])
+names(vals) <- names(combined_results)
+
+# species with the max / min value
+max_species <- names(which.max(vals))
+min_species <- names(which.min(vals))
+
+max_species
+vals[max_species]
+
+min_species
+vals[min_species]
+
+# optional: see the top 10 extremes
+sort(vals, decreasing = TRUE)[1:10]
+
+```
+
+
+# Various View statements
+```{r}
+View(combined_results$`Quiscalus major`)
+
+View(covariate_results_df$humidityMax$estimates$`Quiscalus major`)
+View(covariate_results_df$humidityMax$detection_histories$`Quiscalus major`)
 ```
 
