@@ -2163,14 +2163,14 @@ species_to_plot
 
 Which species have the greatest slopes?
 ```{r}
-covtoplot <- "soilMoisture_O"
+covtoplot <- "pressureMean"
 paramplot <- "slope"
 
 vals <- sapply(names(combined_results), function(sp) combined_results[[sp]][covtoplot, paramplot])
 names(vals) <- names(combined_results)
 
-sort(vals, decreasing = FALSE)[1:100]
-species_to_plot <- names(sort(vals, decreasing = FALSE)[1:100])
+sort(vals, decreasing = TRUE)[1:9]
+species_to_plot <- names(sort(vals, decreasing = TRUE)[1:9])
 
 as.character(species_to_plot)
 ```
@@ -2181,10 +2181,10 @@ as.character(species_to_plot)
 Let's plot something - plot predicted detection at different covariate values for a species
 
 ```{r}
-covtoplot <- "soilMoisture_O"
+covtoplot <- "pressureMean"
 
 # choose which 9 to view (change start index: 1, 10, 19, 28, ...)
-start <- 10
+start <- 1
 sp_batch <- species_to_plot[start:min(start + 8, length(species_to_plot))]
 #sp_batch <- c("Passerculus sandwichensis") #for single species plot
 
@@ -2220,7 +2220,7 @@ p <- ggplot(pred_all, aes(x = .data[[covtoplot]], y = est)) +
 p
 
 ggsave(
-  filename = paste("outputs/", covtoplot, ".png"),
+  filename = paste("outputs/", covtoplot, "_pos.png", sep=""),
   plot = p,
   width = 10,
   height = 8,
@@ -2292,8 +2292,5 @@ View(brd_joineddata_clean %>%
 # Save Outputs
 ```{r}
 write.csv(cov_summary, "outputs/cov_summary.csv", row.names = FALSE)
-
-
-
 ```
 
