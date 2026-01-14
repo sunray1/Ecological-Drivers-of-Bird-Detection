@@ -1802,7 +1802,13 @@ baseline_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean,
 
 Run function and save the results.
 
-```{r warning=FALSE}
+Load saved data instead of rerunning
+```{r}
+baseline_results_path <- file.path("data", "baseline_results.RData")
+load(baseline_results_path)
+```
+
+```{r eval=FALSE, warning=FALSE, include=FALSE}
 species_input <- brd_joineddata_clean %>%
   filter(
     siteID %in% sites,
@@ -1818,6 +1824,10 @@ baseline_results_df <- baseline_model(
   sites = sites,
   years = years
 )
+
+baseline_results_path <- file.path("data", "baseline_results.RData")
+save(baseline_results_df, file = baseline_results_path)
+
 ```
 
 ## Covariate Modeling
@@ -1932,7 +1942,14 @@ covariate_model <- function(species_df, brd_joineddata_clean, brd_perpoint_clean
 
 Run across all covariates
 
-```{r warning=FALSE, include=FALSE}
+Load saved data instead of rerunning
+```{r}
+covariate_results_path <- file.path("data", "covariate_results.RData")
+load(covariate_results_path)
+```
+
+
+```{r eval=FALSE, warning=FALSE, include=FALSE}
 species_input <- brd_joineddata_clean %>%
   filter(
     siteID %in% sites,
@@ -1957,6 +1974,9 @@ for (k in seq_len(length(listofcovs))) {
     covtouse = cov_name
   )
 }
+
+covariate_results_path <- file.path("data", "covariate_results.RData")
+save(covariate_results_df, file = covariate_results_path)
 
 ```
 
@@ -2055,7 +2075,37 @@ combined_results <- combined_results[
 #Manually remove
 combined_results <- combined_results[
   !names(combined_results) %in% c("Chamaea fasciata",  #this has only one detection ever
-                                  "Deltarhynchus flammulatus") #this has only one detection ever
+                                  "Deltarhynchus flammulatus", #this has only one detection ever
+                                  "Cyrtonyx montezumae", #this only has two detections
+                                  "Tyrannus caudifasciatus",
+                                  "Picoides arcticus",
+                                  "Aphelocoma californica",
+                                  "Troglodytes pacificus",
+                                  "Poecile rufescens",
+                                  "Chaetura vauxi",
+                                  "Lagopus leucura",
+                                  "Coccothraustes vespertinus",
+                                  "Oporornis agilis",
+                                  "Phaethon lepturus",
+                                  "Pinicola enucleator",
+                                  "Sphyrapicus ruber",
+                                  "Molothrus bonariensis",
+                                  "Anthus rubescens",
+                                  "Vermivora chrysoptera",
+                                  "Spizelloides arborea",
+                                  "Thalasseus sandvicensis",
+                                  "Gavia immer",
+                                  "Patagioenas fasciata",
+                                  "Cyanocitta stelleri",
+                                  "Vireo vicinior",
+                                  "Spizelloides arborea",
+                                  "Vermivora chrysoptera",
+                                  "Margarops fuscatus",
+                                  "Zenaida aurita",
+                                  "Amphispiza bilineata",
+                                  "Aphelocoma woodhouseii",
+                                  "Setophaga tigrina"
+                                  )
 ]
 
 
@@ -2098,7 +2148,7 @@ cov_summary <- long %>%
 
 Which species has a slope CI that does not include 0 (and therefore may be significant) for a covariate?
 ```{r}
-covtoplot <- "windSpeedHorizontalVariance"
+covtoplot <- "soilMoisture_O"
 
 species_to_plot <- names(combined_results)[
   vapply(combined_results, function(df) {
@@ -2113,14 +2163,14 @@ species_to_plot
 
 Which species have the greatest slopes?
 ```{r}
-covtoplot <- "windSpeedMean"
+covtoplot <- "soilMoisture_O"
 paramplot <- "slope"
 
 vals <- sapply(names(combined_results), function(sp) combined_results[[sp]][covtoplot, paramplot])
 names(vals) <- names(combined_results)
 
-sort(vals, decreasing = FALSE)[1:9]
-species_to_plot <- names(sort(vals, decreasing = FALSE)[1:9])
+sort(vals, decreasing = FALSE)[1:100]
+species_to_plot <- names(sort(vals, decreasing = FALSE)[1:100])
 
 as.character(species_to_plot)
 ```
@@ -2131,12 +2181,12 @@ as.character(species_to_plot)
 Let's plot something - plot predicted detection at different covariate values for a species
 
 ```{r}
-covtoplot <- "windSpeedMean"
+covtoplot <- "soilMoisture_O"
 
 # choose which 9 to view (change start index: 1, 10, 19, 28, ...)
-start <- 1
+start <- 10
 sp_batch <- species_to_plot[start:min(start + 8, length(species_to_plot))]
-#sp_batch <- c("Catharus fuscescens") #for single species plot
+#sp_batch <- c("Passerculus sandwichensis") #for single species plot
 
 # x grid (your IQR-trimmed range)
 vals <- unlist(get(covtoplot))
@@ -2159,7 +2209,7 @@ pred_all <- bind_rows(lapply(sp_batch, function(sp) {
 
 pred_all$species <- factor(pred_all$species, levels = unique(pred_all$species))
 
-ggplot(pred_all, aes(x = .data[[covtoplot]], y = est)) +
+p <- ggplot(pred_all, aes(x = .data[[covtoplot]], y = est)) +
   geom_line() +
   geom_line(aes(y = lower_0.95), linetype = "dashed") +
   geom_line(aes(y = upper_0.95), linetype = "dashed") +
@@ -2167,11 +2217,22 @@ ggplot(pred_all, aes(x = .data[[covtoplot]], y = est)) +
   labs(x = covtoplot, y = "Predicted detection") +
   lims(y = c(0, 1))
 
+p
+
+ggsave(
+  filename = paste("outputs/", covtoplot, ".png"),
+  plot = p,
+  width = 10,
+  height = 8,
+  units = "in",
+  dpi = 300
+)
+
 ```
 Plot distribution of a parameter across all birds for a covariate
 
 ```{r}
-covtoplot  <- "radiationMin"
+covtoplot  <- "soilMoisture_O"
 paramplot  <- "slope" 
 
 vals <- sapply(combined_results, function(df) {
@@ -2219,12 +2280,20 @@ ggplot(data, aes(x = eventType, y = est)) +
 
 # Various View statements
 ```{r}
-View(combined_results$`Coragyps atratus`)
+View(combined_results$`Cyanocitta stelleri`)
 
 View(covariate_results_df$humidityMax$estimates$`Quiscalus major`)
-View(covariate_results_df$humidityMax$detection_histories$`Chordeiles acutipennis`)
+View(covariate_results_df$humidityMax$detection_histories$`Cyanocitta stelleri`)
 
 View(brd_joineddata_clean %>%
   filter(scientificName == "Catharus fuscescens"))
+```
+
+# Save Outputs
+```{r}
+write.csv(cov_summary, "outputs/cov_summary.csv", row.names = FALSE)
+
+
+
 ```
 
